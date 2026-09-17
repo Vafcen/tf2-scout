@@ -48,7 +48,7 @@ Section 4.C ("Automation") of the Steam Subscriber Agreement forbids using scrip
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/<you>/tf2-scout.git
+git clone https://github.com/Vafcen/tf2-scout.git
 cd tf2-scout
 pnpm install
 ```
