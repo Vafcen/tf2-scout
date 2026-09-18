@@ -99,3 +99,15 @@ test('banking: proposes prices one step inside the spread', () => {
   assert.equal(row.sell_price_ref, 3.55);
   assert.ok(Math.abs((row.net_ref ?? 0) - 0.33) < 1e-9);
 });
+
+test('scm → keys: only SKUs the Steam Market name can identify', async () => {
+  const { scmNameIdentifiesSku } = await import('../src/engine/strategies/scmKeys.ts');
+  assert.ok(scmNameIdentifiesSku('5056;6'));
+  assert.ok(scmNameIdentifiesSku('208;11;australium;kt-3'));
+  assert.ok(scmNameIdentifiesSku('205;11;festive'));
+  assert.ok(!scmNameIdentifiesSku('5056;6;uncraftable'), 'non-craftable is not in the market name');
+  assert.ok(!scmNameIdentifiesSku('30421;5;u110'), 'unusual effects are lumped together');
+  assert.ok(!scmNameIdentifiesSku('30469;6;p16738740'), 'paint is not in the market name');
+  assert.ok(!scmNameIdentifiesSku('15000;15;w2;pk20'), 'war paint wear/skin mapping is not handled');
+  assert.ok(!scmNameIdentifiesSku('6526;6;kt-3;td-589'), 'kit targets are not handled');
+});

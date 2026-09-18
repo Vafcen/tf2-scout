@@ -7,7 +7,14 @@ import type { Opportunities } from '../opportunities.ts';
 import type { ScmSource } from '../../sources/scm.ts';
 import { fmtKeysMetal, fmtUsd } from '../../tf2/currencies.ts';
 import { bptfClassifiedsUrl, pricedbUrl, scmUrl } from '../links.ts';
-import { isUnusualSku } from '../../tf2/sku.ts';
+
+/** True when every SKU attribute is one the Steam Market hash name encodes. */
+export function scmNameIdentifiesSku(sku: string): boolean {
+  const parts = sku.split(';');
+  if (parts.length < 2 || !/^\d+$/.test(parts[0]) || !/^\d+$/.test(parts[1])) return false;
+  if (parts[1] === '5') return false; // unusual quality: the Market lumps all effects together
+  return parts.slice(2).every((p) => p === 'australium' || p === 'festive' || p === 'strange' || /^kt-[123]$/.test(p));
+}
 
 interface Candidate {
   sku: string;
@@ -57,9 +64,10 @@ export class ScmKeysStrategy {
     this.lastCandidates = candidates.length;
     const scored: { c: Candidate; keysPerUsd: number; advantage: number; bestBuyRef: number; botBuys: number; verified: boolean; buyerName: string | null; buyerTradeUrl: string | null; buyerCount: number }[] = [];
     for (const c of candidates) {
-      // The Steam Market groups unusuals by hat (all effects together) and doesn't distinguish paints/spells:
-      // it only makes sense for SKUs whose market name identifies the exact item.
-      if (isUnusualSku(c.sku) || /;p\d+/.test(c.sku)) continue;
+      // The Steam Market name only encodes quality, killstreak tier, australium, festivized and strange:
+      // it does NOT distinguish non-craftable, unusual effects, paints, war-paint wear, crates or kit targets,
+      // so any other SKU attribute would pair a plain Market listing with a buy order for a different variant.
+      if (!scmNameIdentifiesSku(c.sku)) continue;
       const book = this.book.build(c.sku, s.snipe.botPulseMaxAgeMin);
       if (book.botBuys.length < 2) continue;
       const best = book.botBuys[0];
