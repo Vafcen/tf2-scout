@@ -13,8 +13,21 @@ key cash price published by backpack.tf (≈ marketplace.tf).
 
 ## Snipe (instant flip)
 `net = bestBuyOrder − sellPrice`. Opportunity if `net ≥ minNetRef (0.33 ref)` and `net/price ≥ minPct (3 %)`.
-Only the cheapest unit per SKU; the remaining sellers are shown as alternatives. High confidence if the buyer is an
-online bot; low if the seller mentions intermediaries (quicksell.store, backpacks…).
+Only the cheapest unit per SKU; the remaining sellers are shown as alternatives.
+
+Exits (buy orders) are ranked by reliability:
+- **family** from the backpack.tf user agent: gladiator, tf2autobot, cobra, quicksell, sentry, junker, dolphin, scrapyard and
+  unknown bot agents are *auto-accept* (they take a matching offer within seconds); "backpack.tf automatic", "User Agent",
+  "-" or no agent means a human-managed listing; no agent and no pulse means a human. Confidence starts at 0.85 for
+  auto-accept exits and is capped at 0.5 otherwise.
+- **room**: units the buy order still wants, parsed from its text (`0 / 1`, `1 out of 1`, `Current stock 1 and max stock 3`,
+  `I am buying 3`). Room 0 disqualifies the order. "24/7" is never read as stock.
+- conditional text (spells, parts, paints, sheens, levels…) or a price above `max(1.6 × reference, reference + 1 ref)`
+  disqualifies the order.
+
+Each opportunity carries the seller's asset id, so the "offer to seller" link opens the trade window with the item
+preloaded (`for_item=440_2_<assetid>`), the exact pure to add (`keys + ref + rec + scrap`) on both legs, and — when a
+token is configured — a `verified` flag set only after a fresh classifieds snapshot confirmed both legs.
 
 ## Deal
 `discount = (pricedb.sell − price) / pricedb.sell ≥ dealMinPct (10 %)` with ≥ `dealMinBuyOrders` (3) bot buy orders
@@ -43,7 +56,16 @@ are discarded if others exist). `discount = (median − price) / median ≥ minD
 references. Conservative exit: the buy order if it is already profitable, otherwise 92 % of the lowest reference.
 Confidence drops with the dispersion between references and their age, and rises with real buy orders.
 
-## Alerts and expiration
-Discord/desktop only for the lanes enabled in Settings and with confidence ≥ `minConfidence` (0.3). An alert for the
-same SKU/lane is not repeated within 30 min unless it improves. Opportunities expire when the listing disappears or
-after `oppTtlMin`.
+## Alerts, verification and expiration
+Discord/desktop only for the lanes enabled in Settings and with confidence ≥ `minConfidence` (0.3). With `BPTF_TOKEN`, a
+snapshot of the SKU is requested first and the alert is sent only if the opportunity survives the refreshed order book
+(20 s timeout, then it goes out as unverified). An alert for the same SKU/lane is not repeated within 30 min unless it
+improves. Opportunities expire when the listing disappears or after `oppTtlMin`; an opportunity you marked as
+"offered" is never expired automatically — close it yourself as executed or rejected.
+
+## Post-alert checks (Stats page)
+Every snipe / deal / unusual / keys opportunity is re-checked 60 s, 5 min and 15 min after it appears (after a fresh
+snapshot when possible): is the sell listing still there, is the buy order still there and at the alerted price, and what
+is the net now? Verdicts: `alive`, `sell_gone`, `buyer_gone`, `buyer_repriced`, `unprofitable`. The Stats page aggregates
+them by lane, buyer family, cost bucket and hour, and computes your win rate from the statuses you set by hand
+(offered → executed / rejected).

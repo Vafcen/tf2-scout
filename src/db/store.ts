@@ -1,5 +1,6 @@
 import type { Db } from './db.ts';
 import type { BptfItem } from '../tf2/sku.ts';
+import { parseBuyRoom, parseSellUnits } from '../tf2/stock.ts';
 
 export type Intent = 'buy' | 'sell';
 
@@ -26,6 +27,12 @@ export interface NormListing {
   source: string | null;
   count: number;
   flags: Record<string, unknown> | null;
+  assetId: string | null;
+  tradeOffersPreferred: boolean | null;
+  buyoutOnly: boolean | null;
+  stockRoom: number | null;
+  stockUnits: number | null;
+  festivized: boolean;
   item: {
     name: string;
     marketName: string | null;
@@ -71,6 +78,12 @@ export interface ListingRow {
   active: number;
   seen_at: number;
   flags: string | null;
+  asset_id: string | null;
+  trade_offers_preferred: number | null;
+  buyout_only: number | null;
+  stock_room: number | null;
+  stock_units: number | null;
+  festivized: number;
 }
 
 export interface ItemRow {
@@ -107,18 +120,23 @@ export class Store {
   upsertListing(l: NormListing, seenAt = now()): void {
     this.db.run(
       `INSERT INTO listings (id, sku, intent, steamid, keys, metal, usd, value_ref, is_bot, ua_client, last_pulse, premium, banned, online,
-         user_name, trade_url, listed_at, bumped_at, details, source, count, active, seen_at, flags)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+         user_name, trade_url, listed_at, bumped_at, details, source, count, active, seen_at, flags,
+         asset_id, trade_offers_preferred, buyout_only, stock_room, stock_units, festivized)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          sku = excluded.sku, intent = excluded.intent, steamid = excluded.steamid, keys = excluded.keys, metal = excluded.metal,
          usd = excluded.usd, value_ref = excluded.value_ref, is_bot = excluded.is_bot, ua_client = excluded.ua_client,
          last_pulse = excluded.last_pulse, premium = excluded.premium, banned = excluded.banned, online = excluded.online,
          user_name = excluded.user_name, trade_url = excluded.trade_url, listed_at = excluded.listed_at, bumped_at = excluded.bumped_at,
          details = excluded.details, source = excluded.source, count = excluded.count, active = 1, seen_at = excluded.seen_at,
-         flags = excluded.flags`,
+         flags = excluded.flags, asset_id = COALESCE(excluded.asset_id, listings.asset_id),
+         trade_offers_preferred = excluded.trade_offers_preferred, buyout_only = excluded.buyout_only,
+         stock_room = excluded.stock_room, stock_units = excluded.stock_units, festivized = excluded.festivized`,
       l.id, l.sku, l.intent, l.steamid, l.keys, l.metal, l.usd, l.valueRef, l.isBot ? 1 : 0, l.uaClient, l.lastPulse,
       l.premium ? 1 : 0, l.banned ? 1 : 0, l.online ? 1 : 0, l.userName, l.tradeUrl, l.listedAt, l.bumpedAt, l.details,
       l.source, l.count, seenAt, l.flags ? JSON.stringify(l.flags) : null,
+      l.assetId, l.tradeOffersPreferred === null ? null : (l.tradeOffersPreferred ? 1 : 0), l.buyoutOnly === null ? null : (l.buyoutOnly ? 1 : 0),
+      l.stockRoom, l.stockUnits, l.festivized ? 1 : 0,
     );
     if (l.intent === 'buy') this.deactivateOtherBuyOrders(l.sku, l.steamid, l.id);
   }
@@ -309,6 +327,12 @@ export function normalizeListing(p: BptfListingPayload, skuOf: (item: BptfItem) 
   if (p.item.craftNumber) flags.craftNumber = p.item.craftNumber;
   if (p.item.quality && typeof p.item.quality !== 'number' && p.item.quality.name) flags.qualityName = p.item.quality.name;
   if (p.item.particle?.name) flags.effect = p.item.particle.name;
+  if (Array.isArray(p.item.strangeParts) && p.item.strangeParts.length) {
+    flags.parts = p.item.strangeParts.map((sp) => sp.killEater?.name ?? sp.name ?? '').filter(Boolean);
+  }
+  if (p.item.festivized) flags.festivized = true;
+  const details = p.details ? String(p.details).slice(0, 240) : null;
+  const assetId = intent === 'sell' && p.item.id && /^\d+$/.test(String(p.item.id)) ? String(p.item.id) : null;
   const refs: NormListing['refs'] = {};
   const pr = p.item.price;
   if (pr?.community?.raw) {
@@ -339,10 +363,16 @@ export function normalizeListing(p: BptfListingPayload, skuOf: (item: BptfItem) 
     tradeUrl: p.user?.tradeOfferUrl ?? null,
     listedAt: p.listedAt ?? null,
     bumpedAt: p.bumpedAt ?? null,
-    details: p.details ? String(p.details).slice(0, 240) : null,
+    details,
     source: p.source ?? null,
     count: Number(p.count ?? 1) || 1,
     flags: Object.keys(flags).length ? flags : null,
+    assetId,
+    tradeOffersPreferred: typeof p.tradeOffersPreferred === 'boolean' ? p.tradeOffersPreferred : null,
+    buyoutOnly: typeof p.buyoutOnly === 'boolean' ? p.buyoutOnly : null,
+    stockRoom: intent === 'buy' ? parseBuyRoom(details) : null,
+    stockUnits: intent === 'sell' ? parseSellUnits(details) : null,
+    festivized: !!p.item.festivized,
     item: {
       name: p.item.name ?? p.item.marketName ?? `#${p.item.defindex}`,
       marketName: p.item.marketName ?? null,

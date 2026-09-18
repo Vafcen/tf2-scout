@@ -43,3 +43,14 @@ export function bptfStatsUrl(item: ItemRow | undefined, sku: string): string {
   if (p.effect) url += `/${p.effect}`;
   return url;
 }
+
+/**
+ * Steam trade-offer URL that opens the trade window with the partner's item already added
+ * (same `for_item` parameter backpack.tf's lightning button uses). Only the partner's item can be preloaded.
+ */
+export function tradeOfferForItemUrl(tradeUrl: string | null, assetId: string | null): string | null {
+  if (!tradeUrl) return null;
+  if (!assetId) return tradeUrl;
+  const sep = tradeUrl.includes('?') ? '&' : '?';
+  return `${tradeUrl}${sep}for_item=440_2_${assetId}`;
+}

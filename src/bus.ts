@@ -15,6 +15,8 @@ export interface BusEvents {
   'opportunity': [opp: { id: number; lane: string; sku: string; status: string; isNew: boolean; improved: boolean }];
   'keyrate': [rate: { bptfRef: number | null; bptfUsd: number | null }];
   'ws:status': [status: { connected: boolean; eventsPerMin: number; lastEventAt: number | null }];
+  /** a classifieds snapshot for this SKU was just applied to the order book */
+  'snapshot:applied': [info: { sku: string; ts: number; listings: number }];
 }
 
 class TypedBus extends EventEmitter {

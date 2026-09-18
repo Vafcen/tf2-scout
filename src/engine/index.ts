@@ -4,7 +4,8 @@ import { bus, type SkuChange } from '../bus.ts';
 import { logger } from '../log.ts';
 import { PriceContext } from './prices.ts';
 import { OrderBook } from './orderbook.ts';
-import { Opportunities, type OppRow } from './opportunities.ts';
+import { Opportunities, ACTIVE_STATUSES, type OppRow } from './opportunities.ts';
+import { PostAlertChecks } from './checks.ts';
 import { SettingsManager } from './settings.ts';
 import { SnipeStrategy } from './strategies/snipe.ts';
 import { BankingStrategy } from './strategies/banking.ts';
@@ -47,6 +48,10 @@ export class Engine {
   readonly ledger: Ledger;
   readonly discord = new DiscordAlerts();
   readonly snapshot: BptfSnapshotSource;
+  readonly checks: PostAlertChecks;
+  private inFlight = new Set<number>();
+  verifiedAlerts = 0;
+  droppedDuringVerification = 0;
   private pending = new Map<string, SkuChange>();
   private flushTimer: NodeJS.Timeout | null = null;
   private timers: NodeJS.Timeout[] = [];
@@ -68,6 +73,7 @@ export class Engine {
     this.unusual = new UnusualStrategy(store, this.book, this.prices, this.opps);
     this.ledger = new Ledger(store);
     this.snapshot = new BptfSnapshotSource(store);
+    this.checks = new PostAlertChecks(store, this.opps, this.book, this.snapshot, this.settings);
   }
 
   get snapshotEnabled(): boolean {
@@ -102,6 +108,7 @@ export class Engine {
     for (const t of this.timers) clearInterval(t);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.snapshot.stop();
+    this.checks.stop();
   }
 
   private onChanges(changes: Map<string, SkuChange>): void {
@@ -216,22 +223,59 @@ export class Engine {
   }
 
   private onOpportunity(ev: { id: number; lane: string; sku: string; status: string; isNew: boolean; improved: boolean }): void {
-    if (ev.isNew && ev.lane !== 'banking') this.snapshot.request(ev.sku, 0, 60);
     if (!(ev.isNew || ev.improved)) return;
-    const s = this.settings.get();
+    if (!['snipe', 'deal', 'unusual', 'keys'].includes(ev.lane)) return;
     const row = this.opps.get(ev.id);
     if (!row) return;
+    void this.verifyThenAlert(row, ev.improved);
+  }
+
+  /**
+   * Before alerting, refresh the SKU's order book with a classifieds snapshot (when a token is configured) so the
+   * alert only goes out if both legs are still there; then schedule the +60 s / +5 min / +15 min checks.
+   */
+  private async verifyThenAlert(row: OppRow, improved: boolean): Promise<void> {
+    if (this.inFlight.has(row.id)) return;
+    this.inFlight.add(row.id);
+    try {
+      let verified = false;
+      if (this.snapshot.enabled) {
+        verified = await this.checks.freshSnapshot(row.sku, 20_000);
+        if (verified) await new Promise((r) => setTimeout(r, 700)); // let the debounced re-evaluation run first
+      }
+      const fresh = this.opps.get(row.id);
+      if (!fresh || !ACTIVE_STATUSES.includes(fresh.status)) {
+        this.droppedDuringVerification++;
+        log.debug(`#${row.id} disappeared during verification`);
+        return;
+      }
+      if (verified) {
+        this.opps.patchDetails(row.id, { verified: true, verifiedAt: now() });
+        this.verifiedAlerts++;
+      }
+      this.checks.schedule(fresh);
+      if (fresh.status === 'new' || improved) this.sendAlerts(this.opps.get(row.id)!, verified);
+    } catch (err) {
+      log.error(`error verifying #${row.id}`, err);
+    } finally {
+      this.inFlight.delete(row.id);
+    }
+  }
+
+  private sendAlerts(row: OppRow, verified: boolean): void {
+    const s = this.settings.get();
     const lane = row.lane;
     const toDiscord = s.alerts.discordLanes.includes(lane) && this.discord.enabled;
     const toDesktop = s.alerts.desktopLanes.includes(lane) && this.desktopAlertsActive();
     if (!toDiscord && !toDesktop) return;
-    if (lane === 'banking') return; // banking is checked in the dashboard, not alerted per item
     if (row.confidence < s.alerts.minConfidence) return; // low confidence: dashboard only
     const k = this.prices.keyRef();
+    const d = row.details ? (JSON.parse(row.details) as Record<string, any>) : {};
     const netText = `${fmtKeysMetal(row.net_ref ?? 0, k)} (${fmtUsd(row.net_usd ?? 0)}, ${(row.pct ?? 0).toFixed(1)} %)`;
-    if (toDesktop) desktopNotify(`${LANE_LABELS[lane]} · +${netText}`, row.title, lane === 'snipe' ? 'critical' : 'normal');
+    const pureText = d.buy?.pure?.text ? ` · add ${d.buy.pure.text}` : '';
+    if (toDesktop) desktopNotify(`${LANE_LABELS[lane]} · +${netText}${verified ? ' ✓' : ''}`, row.title + pureText, lane === 'snipe' ? 'critical' : 'normal');
     if (toDiscord) {
-      this.discord.send({ embeds: [this.embedFor(row, netText)] });
+      this.discord.send({ embeds: [this.embedFor(row, netText, verified)] });
       this.alertsSent++;
     }
     this.opps.markAlerted(row.id);
@@ -243,14 +287,14 @@ export class Engine {
     return a.desktopEnabled && a.desktopMutedUntil <= now();
   }
 
-  private embedFor(row: OppRow, netText: string): DiscordEmbed {
+  private embedFor(row: OppRow, netText: string, verified = false): DiscordEmbed {
     const d = row.details ? (JSON.parse(row.details) as Record<string, any>) : {};
     const fields: DiscordEmbed['fields'] = [
       { name: 'Net profit', value: netText, inline: true },
       { name: 'Confidence', value: `${Math.round(row.confidence * 100)} %`, inline: true },
     ];
-    if (d.buy?.priceText) fields.push({ name: 'Buy', value: `${d.buy.priceText} from ${d.buy.seller?.name ?? '?'}${d.buy.seller?.isBot ? ' (bot)' : ''}`, inline: false });
-    if (d.sell?.priceText) fields.push({ name: 'Sell', value: `${d.sell.priceText}${d.sell.buyer?.name ? ' to ' + d.sell.buyer.name + (d.sell.buyer.isBot ? ' (bot)' : '') : ''}`, inline: false });
+    if (d.buy?.priceText) fields.push({ name: 'Buy', value: `${d.buy.priceText} from ${d.buy.seller?.name ?? '?'}${d.buy.seller?.family ? ` (${d.buy.seller.family})` : ''}${d.buy.pure?.text ? ` — add ${d.buy.pure.text}` : ''}`, inline: false });
+    if (d.sell?.priceText) fields.push({ name: 'Sell', value: `${d.sell.priceText}${d.sell.buyer?.name ? ' to ' + d.sell.buyer.name + (d.sell.buyer.family ? ` (${d.sell.buyer.family}${d.sell.buyer.room !== null && d.sell.buyer.room !== undefined ? `, room ${d.sell.buyer.room}` : ''})` : '') : ''}${d.sell.pure?.text ? ` — take ${d.sell.pure.text}` : ''}`, inline: false });
     const links: string[] = [];
     if (d.links?.sellerTradeOffer) links.push(`[Trade offer to seller](${d.links.sellerTradeOffer})`);
     if (d.sell?.buyer?.tradeUrl) links.push(`[Trade offer to buyer](${d.sell.buyer.tradeUrl})`);
@@ -264,7 +308,7 @@ export class Engine {
       color: LANE_COLORS[row.lane],
       fields,
       thumbnail: d.item?.imageUrl ? { url: String(d.item.imageUrl).startsWith('http') ? d.item.imageUrl : `https://backpack.tf${d.item.imageUrl}` } : undefined,
-      footer: { text: `TF2 Scout · ${row.sku}` },
+      footer: { text: `TF2 Scout · ${row.sku}${verified ? ' · verified by snapshot' : ' · unverified (live feed only)'}` },
       timestamp: new Date().toISOString(),
     };
   }

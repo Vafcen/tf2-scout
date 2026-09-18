@@ -165,3 +165,25 @@ DROP TABLE IF EXISTS events;
 
 -- v3: item base name (for backpack.tf classifieds links)
 ALTER TABLE items ADD COLUMN base_name TEXT;
+
+-- v4: execution metadata (asset ids, stock room, attributes) and post-alert checks
+ALTER TABLE listings ADD COLUMN asset_id TEXT;
+ALTER TABLE listings ADD COLUMN trade_offers_preferred INTEGER;
+ALTER TABLE listings ADD COLUMN buyout_only INTEGER;
+ALTER TABLE listings ADD COLUMN stock_room INTEGER;      -- buy orders: units the buyer still wants (NULL = unknown)
+ALTER TABLE listings ADD COLUMN stock_units INTEGER;     -- sell listings: units the seller has (NULL = unknown)
+ALTER TABLE listings ADD COLUMN festivized INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS opp_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  opp_id INTEGER NOT NULL,
+  offset_sec INTEGER NOT NULL,          -- 60 / 300 / 900 seconds after the alert
+  checked_at INTEGER NOT NULL,
+  sell_alive INTEGER NOT NULL,
+  buy_alive INTEGER NOT NULL,
+  best_buy_ref REAL,
+  net_then REAL,
+  verdict TEXT NOT NULL,                -- alive | sell_gone | buyer_gone | buyer_repriced | unprofitable
+  verified INTEGER NOT NULL DEFAULT 0   -- 1 when the check ran right after a fresh snapshot
+);
+CREATE INDEX IF NOT EXISTS opp_checks_opp ON opp_checks(opp_id, offset_sec);
+CREATE INDEX IF NOT EXISTS opp_lane_created ON opportunities(lane, created_at);

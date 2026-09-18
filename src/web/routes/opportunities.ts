@@ -50,16 +50,18 @@ export function oppTable(app: AppContext, f: Filters, rows: OppRow[]): string {
       <td><span class="tag ${r.lane}">${LANE_LABELS[r.lane]}</span></td>
       <td class="item">${img ? raw(`<img class="icon" src="${esc(img)}" alt="">`) : ''}<a href="/opp/${r.id}">${d.item?.name ?? r.sku}</a>
         ${d.suspicious ? raw('<span class="tag warn" title="Listing mentions ' + esc(d.suspicious) + '">⚠</span>') : ''}
+        ${d.verified ? raw('<span class="tag bot" title="verified by classifieds snapshot">✓</span>') : ''}
+        ${r.status === 'offered' ? raw('<span class="tag keys" title="you sent an offer">offered</span>') : ''}
         ${d.buy?.flags?.spells ? raw('<span class="tag bot" title="spells">✨ ' + esc((d.buy.flags.spells as string[]).join(', ')) + '</span>') : ''}
         ${d.buy?.flags?.paint ? raw('<span class="tag bot" title="painted">🎨 ' + esc(d.buy.flags.paint) + '</span>') : ''}
       </td>
       <td class="num">${r.buy_venue === 'scm' || r.buy_venue === 'marketplace.tf' ? (r.buy_price_usd !== null ? fmtUsd(r.buy_price_usd) : '—') : (r.buy_price_ref !== null ? fmtKeysMetal(r.buy_price_ref, k) : '—')}<div class="small muted">${seller ? (seller.isBot ? '🤖 ' : '👤 ') + (seller.name ?? '') : (r.buy_venue === 'scm' ? 'Steam Market' : (r.buy_venue ?? ''))}</div></td>
-      <td class="num">${r.sell_price_ref !== null ? fmtKeysMetal(r.sell_price_ref, k) : '—'}<div class="small muted">${buyer ? (buyer.isBot ? '🤖 ' : '👤 ') + (buyer.name ?? '') : (d.sell?.note ?? r.sell_venue ?? '')}</div></td>
+      <td class="num">${r.sell_price_ref !== null ? fmtKeysMetal(r.sell_price_ref, k) : '—'}<div class="small muted">${buyer ? (buyer.isBot ? '🤖 ' : '👤 ') + (buyer.name ?? '') + (buyer.family ? ` · ${buyer.family}` : '') + (buyer.room !== null && buyer.room !== undefined ? ` · room ${buyer.room}` : '') : (d.sell?.note ?? r.sell_venue ?? '')}</div></td>
       <td class="num"><span class="pos">+${fmtKeysMetal(r.net_ref ?? 0, k)}</span><div class="small muted">${fmtUsd(r.net_usd ?? 0)} · ${pctText(r.pct)}</div></td>
       <td class="num"><span class="conf" title="${Math.round(r.confidence * 100)} %"><i style="width:${Math.round(r.confidence * 100)}%"></i></span></td>
       <td class="num small muted" title="created ${fmtAgo(r.created_at)} · updated ${fmtAgo(r.updated_at)}">${fmtAgo(r.updated_at)}</td>
       <td class="small">
-        ${d.links?.sellerTradeOffer ? raw(`<a href="${esc(d.links.sellerTradeOffer)}" target="_blank" rel="noopener">Offer ↗</a> `) : ''}
+        ${d.links?.sellerTradeOfferForItem ? raw(`<a href="${esc(d.links.sellerTradeOfferForItem)}" target="_blank" rel="noopener" title="opens the trade window with the seller's item preloaded">Offer ↗</a> `) : d.links?.sellerTradeOffer ? raw(`<a href="${esc(d.links.sellerTradeOffer)}" target="_blank" rel="noopener">Offer ↗</a> `) : ''}
         ${d.links?.classifieds ? raw(`<a href="${esc(d.links.classifieds)}" target="_blank" rel="noopener">bptf ↗</a>`) : ''}
       </td>
     </tr>`.html;
@@ -105,16 +107,18 @@ export function opportunityRoutes(hono: Hono, app: AppContext): void {
     const links = Object.entries((d.links ?? {}) as Record<string, string | null>).filter(([, v]) => !!v);
     const linkLabels: Record<string, string> = {
       classifieds: 'Classifieds (sell)', classifiedsBuy: 'Classifieds (buy)', classifiedsSell: 'Classifieds (sell)', sellerBptf: 'Seller on backpack.tf', sellerSteam: 'Seller on Steam',
-      sellerTradeOffer: 'Send offer to seller', pricedb: 'History on pricedb', scm: 'Steam Market', stats: 'Stats on backpack.tf', marketplace: 'marketplace.tf',
+      sellerTradeOffer: 'Send offer to seller', sellerTradeOfferForItem: 'Send offer to seller (item preloaded)', pricedb: 'History on pricedb', scm: 'Steam Market', stats: 'Stats on backpack.tf', marketplace: 'marketplace.tf',
     };
+    const checks = app.db.all<{ offset_sec: number; verdict: string; verified: number; net_then: number | null }>('SELECT offset_sec, verdict, verified, net_then FROM opp_checks WHERE opp_id = ? ORDER BY offset_sec', r.id);
+    const fam = (x: any) => (x?.family ? ` · ${x.family}` : '');
     const body = html`
       <p><a href="/">← Opportunities</a></p>
       <h1><span class="tag ${r.lane}">${LANE_LABELS[r.lane]}</span> ${img ? raw(`<img class="icon" src="${esc(img)}" alt="">`) : ''} ${d.item?.name ?? r.sku}</h1>
       <div class="grid">
-        <div class="kpi"><div class="label">Buy</div><div class="value">${r.buy_price_ref !== null ? fmtKeysMetal(r.buy_price_ref, k) : '—'}</div><div class="small muted">${d.buy?.seller ? (d.buy.seller.isBot ? '🤖 ' : '👤 ') + (d.buy.seller.name ?? '') : ''}</div></div>
-        <div class="kpi"><div class="label">Sell</div><div class="value">${r.sell_price_ref !== null ? fmtKeysMetal(r.sell_price_ref, k) : '—'}</div><div class="small muted">${d.sell?.buyer ? (d.sell.buyer.isBot ? '🤖 ' : '👤 ') + (d.sell.buyer.name ?? '') : (d.sell?.note ?? '')}</div></div>
+        <div class="kpi"><div class="label">Buy</div><div class="value">${r.buy_price_ref !== null ? fmtKeysMetal(r.buy_price_ref, k) : '—'}</div><div class="small muted">${d.buy?.seller ? (d.buy.seller.isBot ? '🤖 ' : '👤 ') + (d.buy.seller.name ?? '') + fam(d.buy.seller) : ''}${d.buy?.pure?.text ? html`<div>add <b>${d.buy.pure.text}</b></div>` : ''}</div></div>
+        <div class="kpi"><div class="label">Sell</div><div class="value">${r.sell_price_ref !== null ? fmtKeysMetal(r.sell_price_ref, k) : '—'}</div><div class="small muted">${d.sell?.buyer ? (d.sell.buyer.isBot ? '🤖 ' : '👤 ') + (d.sell.buyer.name ?? '') + fam(d.sell.buyer) + (d.sell.buyer.room !== null && d.sell.buyer.room !== undefined ? ` · room ${d.sell.buyer.room}` : '') : (d.sell?.note ?? '')}${d.sell?.pure?.text ? html`<div>take <b>${d.sell.pure.text}</b></div>` : ''}</div></div>
         <div class="kpi"><div class="label">Net</div><div class="value pos">+${fmtKeysMetal(r.net_ref ?? 0, k)}</div><div class="small muted">${fmtUsd(r.net_usd ?? 0)} · ${pctText(r.pct)}</div></div>
-        <div class="kpi"><div class="label">Confidence · status</div><div class="value">${Math.round(r.confidence * 100)} % · ${r.status}</div><div class="small muted">created ${fmtAgo(r.created_at)} · upd. ${fmtAgo(r.updated_at)}</div></div>
+        <div class="kpi"><div class="label">Confidence · status</div><div class="value">${Math.round(r.confidence * 100)} % · ${r.status}</div><div class="small muted">created ${fmtAgo(r.created_at)} · upd. ${fmtAgo(r.updated_at)} · ${d.verified ? '✓ verified by snapshot' : 'unverified (live feed)'}</div></div>
       </div>
       ${d.suspicious ? raw(`<div class="card"><span class="tag warn">⚠ Warning</span> The listing mentions "${esc(d.suspicious)}": this is usually a middleman (quicksell) or a backpack seller; double-check before sending anything.</div>`) : ''}
       <div class="two">
@@ -129,11 +133,21 @@ export function opportunityRoutes(hono: Hono, app: AppContext): void {
           <ul>${links.map(([key, url]) => html`<li><a href="${url!}" target="_blank" rel="noopener">${linkLabels[key] ?? key} ↗</a></li>`)}
             ${d.sell?.buyer?.tradeUrl ? html`<li><a href="${d.sell.buyer.tradeUrl}" target="_blank" rel="noopener">Send offer to buyer ↗</a></li>` : ''}
           </ul>
+          <h2>Execute</h2>
           <div class="row">
+            ${d.links?.sellerTradeOfferForItem ? html`<a class="btn" href="${d.links.sellerTradeOfferForItem}" target="_blank" rel="noopener">1 · Offer to seller (item preloaded) ↗</a>` : d.links?.sellerTradeOffer ? html`<a class="btn" href="${d.links.sellerTradeOffer}" target="_blank" rel="noopener">1 · Offer to seller ↗</a>` : ''}
+            ${d.sell?.buyer?.tradeUrl ? html`<a class="btn" href="${d.sell.buyer.tradeUrl}" target="_blank" rel="noopener">2 · Offer to buyer ↗</a>` : ''}
+          </div>
+          <h2>Track it</h2>
+          <div class="row">
+            ${r.status !== 'offered' ? html`<form method="post" action="/opp/${r.id}/offered"><button type="submit" class="secondary">Offer sent</button></form>` : ''}
             <form method="post" action="/opp/${r.id}/executed"><button type="submit">Mark as executed</button></form>
+            <form method="post" action="/opp/${r.id}/rejected"><button type="submit" class="secondary">Rejected / gone</button></form>
             <form method="post" action="/opp/${r.id}/dismiss"><button type="submit" class="secondary">Dismiss</button></form>
             <a class="btn secondary" href="/item/${encodeURIComponent(r.sku)}">View item and order book</a>
           </div>
+          <p class="small muted">Press "Offer sent" when you send the first offer, then "Executed" (and log the real prices) or "Rejected / gone". That is what feeds the win rate on the Stats page.</p>
+          ${checks.length ? html`<h2>Re-checks after the alert</h2><ul class="small">${checks.map((ch) => html`<li>+${ch.offset_sec >= 60 ? `${ch.offset_sec / 60} min` : `${ch.offset_sec} s`}: <b>${ch.verdict}</b>${ch.net_then !== null ? ` (net then ${fmtKeysMetal(ch.net_then, k)})` : ''}${ch.verified ? ' · snapshot' : ''}</li>`)}</ul>` : ''}
         </div>
         <div class="card">
           <h2>Context</h2>
@@ -159,6 +173,18 @@ export function opportunityRoutes(hono: Hono, app: AppContext): void {
     const id = Number(c.req.param('id'));
     app.engine.opps.setStatus(id, 'executed');
     return c.redirect(`/portfolio/new?opp=${id}`);
+  });
+
+  hono.post('/opp/:id/offered', (c) => {
+    const id = Number(c.req.param('id'));
+    app.engine.opps.setStatus(id, 'offered');
+    return c.redirect(`/opp/${id}`);
+  });
+
+  hono.post('/opp/:id/rejected', (c) => {
+    const id = Number(c.req.param('id'));
+    app.engine.opps.setStatus(id, 'rejected');
+    return c.redirect('/');
   });
 
   hono.post('/opp/:id/dismiss', (c) => {

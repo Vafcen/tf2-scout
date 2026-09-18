@@ -17,6 +17,7 @@ import { settingsRoutes } from './routes/settings.ts';
 import { statusRoutes } from './routes/status.ts';
 import { portfolioRoutes } from './routes/portfolio.ts';
 import { bankingRoutes } from './routes/banking.ts';
+import { statsRoutes } from './routes/stats.ts';
 import { topStatus } from './layout.ts';
 import type { Lane } from '../config.ts';
 
@@ -92,6 +93,7 @@ export function startWeb(app: AppContext) {
   statusRoutes(hono, app);
   portfolioRoutes(hono, app);
   bankingRoutes(hono, app);
+  statsRoutes(hono, app);
 
   hono.notFound((c) => c.text('Not found', 404));
   hono.onError((err, c) => {

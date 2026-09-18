@@ -39,7 +39,7 @@ export interface OppRow {
   pct: number | null;
   confidence: number;
   details: string | null;
-  status: string;
+  status: string; // new | alerted | offered | executed | rejected | expired | dismissed
   created_at: number;
   updated_at: number;
   expires_at: number | null;
@@ -52,6 +52,10 @@ export interface UpsertResult {
   improved: boolean;
   row: OppRow;
 }
+
+/** Statuses that still count as "live" for the dashboard and the strategies. */
+export const ACTIVE_STATUSES = ['new', 'alerted', 'offered'];
+const ACTIVE_SQL = "status IN ('new','alerted','offered')";
 
 export class Opportunities {
   private store: Store;
@@ -67,7 +71,7 @@ export class Opportunities {
     );
     const expiresAt = ts + o.ttlMin * 60;
     const details = JSON.stringify(o.details);
-    if (!existing || existing.status === 'expired' || existing.status === 'dismissed' || existing.status === 'executed') {
+    if (!existing || !ACTIVE_STATUSES.includes(existing.status)) {
       // New (or reactivated after expiring): replace the row to keep the unique key.
       if (existing) this.store.db.run('DELETE FROM opportunities WHERE id = ?', existing.id);
       // Anti-spam: if we already alerted something equal or better for this lane+SKU < 30 min ago, it is born as "alerted".
@@ -113,9 +117,11 @@ export class Opportunities {
 
   expire(id: number, reason: string): void {
     const row = this.get(id);
-    if (!row || row.status === 'expired' || row.status === 'executed' || row.status === 'dismissed') return;
+    if (!row || !ACTIVE_STATUSES.includes(row.status)) return;
+    if (row.status === 'offered') return; // you already acted on it: only you can close it (executed / rejected)
     const details = row.details ? (JSON.parse(row.details) as Record<string, unknown>) : {};
     details.expiredReason = reason;
+    details.lifeSec = now() - row.created_at;
     this.store.db.run("UPDATE opportunities SET status = 'expired', updated_at = ?, details = ? WHERE id = ?", now(), JSON.stringify(details), id);
     bus.emitTyped('opportunity', { id, lane: row.lane, sku: row.sku, status: 'expired', isNew: false, improved: false });
   }
@@ -123,23 +129,32 @@ export class Opportunities {
   /** Expires the active opportunities of a SKU/lane that are not in `keepIds` (listing ids). */
   expireOthers(lane: Lane, sku: string, keepListingIds: string[], reason: string): void {
     const rows = this.store.db.all<OppRow>(
-      "SELECT * FROM opportunities WHERE lane = ? AND sku = ? AND status IN ('new','alerted')", lane, sku,
+       `SELECT * FROM opportunities WHERE lane = ? AND sku = ? AND ${ACTIVE_SQL}`, lane, sku,
     );
     for (const r of rows) if (!keepListingIds.includes(r.listing_id)) this.expire(r.id, reason);
   }
 
   expireByListing(listingId: string, reason: string): void {
-    const rows = this.store.db.all<OppRow>("SELECT * FROM opportunities WHERE listing_id = ? AND status IN ('new','alerted')", listingId);
+    const rows = this.store.db.all<OppRow>(`SELECT * FROM opportunities WHERE listing_id = ? AND ${ACTIVE_SQL}`, listingId);
     for (const r of rows) this.expire(r.id, reason);
   }
 
   expireStale(ts = now()): number {
-    const rows = this.store.db.all<OppRow>("SELECT * FROM opportunities WHERE status IN ('new','alerted') AND expires_at IS NOT NULL AND expires_at < ?", ts);
+    const rows = this.store.db.all<OppRow>(`SELECT * FROM opportunities WHERE ${ACTIVE_SQL} AND expires_at IS NOT NULL AND expires_at < ?`, ts);
     for (const r of rows) this.expire(r.id, 'ttl');
     return rows.length;
   }
 
-  setStatus(id: number, status: 'executed' | 'dismissed'): void {
+  /** Merge keys into the details JSON (e.g. verification results). */
+  patchDetails(id: number, patch: Record<string, unknown>): void {
+    const row = this.get(id);
+    if (!row) return;
+    const details = row.details ? (JSON.parse(row.details) as Record<string, unknown>) : {};
+    Object.assign(details, patch);
+    this.store.db.run('UPDATE opportunities SET details = ? WHERE id = ?', JSON.stringify(details), id);
+  }
+
+  setStatus(id: number, status: 'executed' | 'dismissed' | 'offered' | 'rejected'): void {
     const row = this.get(id);
     if (!row) return;
     this.store.db.run('UPDATE opportunities SET status = ?, updated_at = ? WHERE id = ?', status, now(), id);
@@ -148,8 +163,8 @@ export class Opportunities {
 
   active(lane?: Lane, limit = 200): OppRow[] {
     return lane
-      ? this.store.db.all<OppRow>("SELECT * FROM opportunities WHERE status IN ('new','alerted') AND lane = ? ORDER BY net_ref DESC LIMIT ?", lane, limit)
-      : this.store.db.all<OppRow>("SELECT * FROM opportunities WHERE status IN ('new','alerted') ORDER BY updated_at DESC LIMIT ?", limit);
+      ? this.store.db.all<OppRow>(`SELECT * FROM opportunities WHERE ${ACTIVE_SQL} AND lane = ? ORDER BY net_ref DESC LIMIT ?`, lane, limit)
+      : this.store.db.all<OppRow>(`SELECT * FROM opportunities WHERE ${ACTIVE_SQL} ORDER BY updated_at DESC LIMIT ?`, limit);
   }
 
   recent(limit = 100): OppRow[] {

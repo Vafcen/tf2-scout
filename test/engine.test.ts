@@ -8,6 +8,7 @@ import { Opportunities } from '../src/engine/opportunities.ts';
 import { SnipeStrategy } from '../src/engine/strategies/snipe.ts';
 import { BankingStrategy } from '../src/engine/strategies/banking.ts';
 import { DEFAULT_SETTINGS } from '../src/config.ts';
+import { parseBuyRoom } from '../src/tf2/stock.ts';
 
 function setup() {
   const db = new Db(':memory:');
@@ -25,6 +26,8 @@ function listing(over: Partial<NormListing> & { id: string; sku: string; intent:
     keys: 0, usd: null, valueRef: over.metal, isBot: true, uaClient: 'tf2autobot', lastPulse: now(), premium: true, banned: false, online: true,
     userName: 'bot ' + over.steamid, tradeUrl: 'https://steamcommunity.com/tradeoffer/new/?partner=1&token=x', listedAt: now(), bumpedAt: now(),
     details: null, source: 'userAgent', count: 1, flags: null,
+    assetId: over.intent === 'sell' ? over.id.replace('440_', '') : null, tradeOffersPreferred: true, buyoutOnly: true,
+    stockRoom: over.intent === 'buy' ? parseBuyRoom(over.details ?? null) : null, stockUnits: null, festivized: false,
     item: { name: 'Security Shades', marketName: 'Security Shades', defindex: 479, quality: 6, effect: null, ksTier: 0, australium: false, imageUrl: null, baseName: 'Security Shades' },
     refs: {},
     ...over,
@@ -110,4 +113,43 @@ test('scm → keys: only SKUs the Steam Market name can identify', async () => {
   assert.ok(!scmNameIdentifiesSku('30469;6;p16738740'), 'paint is not in the market name');
   assert.ok(!scmNameIdentifiesSku('15000;15;w2;pk20'), 'war paint wear/skin mapping is not handled');
   assert.ok(!scmNameIdentifiesSku('6526;6;kt-3;td-589'), 'kit targets are not handled');
+});
+
+test('post-alert checks classify what happened to a snipe', async () => {
+  const { PostAlertChecks } = await import('../src/engine/checks.ts');
+  const { BptfSnapshotSource } = await import('../src/sources/bptfSnapshot.ts');
+  const { SettingsManager } = await import('../src/engine/settings.ts');
+  const { store, book, prices, opps } = setup();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  store.upsertItem('479;6', listing({ id: 'x', sku: '479;6', intent: 'sell', steamid: '0', metal: 1 }).item);
+  store.upsertListing(listing({ id: '440_1', sku: '479;6', intent: 'sell', steamid: 'S1', metal: 2.33 }));
+  store.upsertListing(listing({ id: '440_B1_a', sku: '479;6', intent: 'buy', steamid: 'B1', metal: 3.33, uaClient: 'Gladiator.tf bot', details: 'Buying 0 / 2' }));
+  new SnipeStrategy(store, book, prices, opps).evaluate('479;6', s);
+  const opp = opps.active('snipe')[0];
+  const d = JSON.parse(opp.details!) as { sell: { buyer: { family: string; room: number } }; links: { sellerTradeOfferForItem: string }; buy: { pure: { text: string } } };
+  assert.equal(d.sell.buyer.family, 'gladiator');
+  assert.equal(d.sell.buyer.room, 2);
+  assert.ok(d.links.sellerTradeOfferForItem.endsWith('&for_item=440_2_1'));
+  assert.equal(d.buy.pure.text, '2 ref + 1 rec'); // 2.33 ref = 21 scrap
+  const checks = new PostAlertChecks(store, opps, book, new BptfSnapshotSource(store), new SettingsManager(store));
+  await checks.runCheck(opp.id, 60);
+  // buyer reprices below the alerted exit
+  store.upsertListing(listing({ id: '440_B1_a', sku: '479;6', intent: 'buy', steamid: 'B1', metal: 2.44, uaClient: 'Gladiator.tf bot', details: 'Buying 0 / 2' }));
+  await checks.runCheck(opp.id, 300);
+  // seller's listing disappears
+  store.deactivateListing('440_1');
+  await checks.runCheck(opp.id, 900);
+  const rows = store.db.all<{ offset_sec: number; verdict: string }>('SELECT offset_sec, verdict FROM opp_checks WHERE opp_id = ? ORDER BY offset_sec', opp.id);
+  assert.deepEqual(rows.map((r) => r.verdict), ['alive', 'buyer_repriced', 'sell_gone']);
+});
+
+test('buy orders that are already full are not used as exits', () => {
+  const { store, book, prices, opps } = setup();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  store.upsertListing(listing({ id: '440_1', sku: '479;6', intent: 'sell', steamid: 'S1', metal: 2.33 }));
+  store.upsertListing(listing({ id: '440_B1_a', sku: '479;6', intent: 'buy', steamid: 'B1', metal: 3.55, details: 'I am buying, I have 1 / 1.' }));
+  store.upsertListing(listing({ id: '440_B2_a', sku: '479;6', intent: 'buy', steamid: 'B2', metal: 3.11, details: 'Stock: 0/1' }));
+  new SnipeStrategy(store, book, prices, opps).evaluate('479;6', s);
+  const opp = opps.active('snipe')[0];
+  assert.equal(opp.sell_price_ref, 3.11, 'the full buy order (1/1) must be skipped');
 });

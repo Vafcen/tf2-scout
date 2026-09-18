@@ -55,6 +55,7 @@ export interface BptfItem {
   crateSeries?: number;
   paint?: { id?: number; name?: string; color?: string };
   spells?: { name: string; type?: string }[];
+  strangeParts?: { name?: string; killEater?: { name?: string }; score?: number }[];
   sheen?: { id: number; name: string };
   killstreaker?: { id: number; name: string };
   recipe?: {

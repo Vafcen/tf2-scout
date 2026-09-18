@@ -163,11 +163,12 @@ or put the host on a private network such as Tailscale and bind to that interfac
 - **Banking** (`/banking`): the current banking proposals sorted by score, with the price to place your buy order at, the price to sell at, the net per cycle, spread, 24 h activity (sells removed, sells posted, events) and the state of the book. "Recalculate now" reruns the strategy immediately.
 - **Keys** (`/keys`): the key board (pricedb buy/sell, backpack.tf rate derived from the feed and its USD value, best buy order and sell listing on backpack.tf, Steam Market low/median/volume and what you would net selling a key there after Steam's 15 % fee), key-flip opportunities and the recent rate history.
 - **Portfolio** (`/portfolio`): realized profit (FIFO), number of buys and sells, open positions with their cost, daily backpack value, and the trade log.
+- **Stats** (`/stats`): per lane, how many opportunities were created, alerted, verified, acted on, executed, rejected or expired, their median life, your win rate, and capture tables ("was it still takeable when re-checked at +60 s / +5 min / +15 min?") by lane, by buyer family, by cost bucket and by hour of day, plus why opportunities die (seller gone, buyer gone, buyer repriced, margin gone). Window selectable in days.
 - **Settings** (`/settings`): every threshold described below, alert lanes, desktop-notification master switch, "Restore defaults".
 - **Status** (`/status`): feed connection and events per minute, pricedb sync age, Steam Market request and rate-limit counters, snapshot queue, engine counters, alerts sent, database size, memory, uptime and which `.env` variables are set.
 - **Item** (`/item/<sku>`): the full order book for one item (buy orders and sell listings, bot/human, online/offline, conditional buy orders flagged), reference prices, 24 h activity, links to classifieds, backpack.tf stats, pricedb and the Steam Market, an **Add to watchlist** button (watchlisted items get snapshot priority) and **Query Steam Market now**.
 
-JSON is available at `/api/opportunities`, `/api/item/<sku>`, `/api/keys`, `/api/settings` (GET and PUT), `/api/portfolio`, `/api/status`, `/health` returns `OK`, and `/events` is the SSE stream.
+JSON is available at `/api/opportunities`, `/api/item/<sku>`, `/api/keys`, `/api/settings` (GET and PUT), `/api/portfolio`, `/api/stats?days=7`, `/api/checks/<opportunity id>`, `/api/status`, `/health` returns `OK`, and `/events` is the SSE stream.
 
 ### Desktop alerts and the bell
 
@@ -183,11 +184,14 @@ With `DISCORD_WEBHOOK_URL` set, each qualifying opportunity is posted once as an
 
 ### Acting on a snipe safely
 
-1. Open the opportunity from the toast, the Discord message or the table.
-2. Read the warning tags. A warning tag on the item means the seller's text mentions a keyword from your suspicious list (`quicksell.store`, `backpacks`, `sfuminator` by default), typically a middleman or a backpack seller. Buy orders whose text asks for spells, paints, parts, levels and the like are flagged "conditional" and are never used as an exit.
-3. Click **Classifieds** and confirm that both the sell listing and the buy order are still there; the feed is fast but bots are faster, and the snapshot (if you have a token) only re-checks every couple of seconds per item.
-4. Use **Send offer to seller** (their trade URL) to buy, then **Send offer to buyer** to sell to the buy order. Bots accept within seconds if they still have stock room.
-5. Click **Mark as executed**. Dismiss the ones you skip so they stop cluttering the list.
+1. Open the opportunity from the toast, the Discord message or the table. A `✓` tag means the order book was re-fetched with a classifieds snapshot right before the alert (needs `BPTF_TOKEN`); without it the alert says "unverified (live feed)".
+2. Read the warning tags. A warning tag on the item means the seller's text mentions a keyword from your suspicious list (`quicksell.store`, `backpacks`, `sfuminator` by default), typically a middleman or a backpack seller. Buy orders whose text asks for spells, paints, parts, levels and the like are flagged "conditional", and buy orders whose text says they are full (`1 / 1`, `1 out of 1`) are skipped; neither is ever used as an exit.
+3. Look at the exit's **family** (gladiator, tf2autobot, cobra, quicksell… accept a matching offer within seconds; "human-managed listing" and "human" may take hours) and its **room** (how many units the buy order still wants, parsed from its text). Confidence is capped at 50 % when the exit is not an auto-accept bot.
+4. **1 · Offer to seller (item preloaded)** opens Steam's trade window with the seller's item already on their side (the same `for_item` link backpack.tf's lightning button uses; works in the Steam mobile app too). Add the pure shown under "Buy" (e.g. `1 key + 5 ref + 1 rec`) and send. Steam cannot preload *your* side, so the sell leg is "add the item, take the pure shown under Sell".
+5. **2 · Offer to buyer** opens the buy order's trade window for the second leg.
+6. Track it: press **Offer sent** when you send the first offer, then **Mark as executed** (and log the real prices) or **Rejected / gone**. This is what the Stats page needs to compute your win rate; "Dismiss" is for the ones you skip.
+
+The app re-checks every snipe, deal, unusual and key opportunity 60 s, 5 min and 15 min after it appears (after a fresh snapshot when a token is configured) and records whether it was still takeable; see **Stats**.
 
 ### Logging trades and reading the FIFO P&L
 

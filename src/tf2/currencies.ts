@@ -89,3 +89,19 @@ export function netAfterFeePct(amount: number, feePct: number): number {
 export function pct(net: number, base: number): number {
   return base > 0 ? (net / base) * 100 : 0;
 }
+
+/** Breaks a value in ref into the physical pure you would add to a trade window: keys, refined, reclaimed, scrap. */
+export function pureBreakdown(valueInRef: number, keyRateRef: number): { keys: number; ref: number; rec: number; scrap: number; text: string } {
+  const { keys, metal } = splitRef(Math.max(0, valueInRef), keyRateRef);
+  let scrapTotal = toScrap(metal);
+  const ref = Math.floor(scrapTotal / 9);
+  scrapTotal -= ref * 9;
+  const rec = Math.floor(scrapTotal / 3);
+  const scrap = scrapTotal - rec * 3;
+  const parts: string[] = [];
+  if (keys) parts.push(`${keys} ${keys === 1 ? 'key' : 'keys'}`);
+  if (ref) parts.push(`${ref} ref`);
+  if (rec) parts.push(`${rec} rec`);
+  if (scrap) parts.push(`${scrap} scrap`);
+  return { keys, ref, rec, scrap, text: parts.join(' + ') || '0' };
+}

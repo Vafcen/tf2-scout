@@ -12,6 +12,7 @@ const NAV = [
   ['/banking', 'Banking'],
   ['/keys', 'Keys'],
   ['/portfolio', 'Portfolio'],
+  ['/stats', 'Stats'],
   ['/settings', 'Settings'],
   ['/status', 'Status'],
 ] as const;

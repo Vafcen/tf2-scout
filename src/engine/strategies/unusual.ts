@@ -4,8 +4,9 @@ import { now } from '../../db/store.ts';
 import type { OrderBook } from '../orderbook.ts';
 import type { PriceContext } from '../prices.ts';
 import type { Opportunities } from '../opportunities.ts';
-import { fmtKeysMetal, fmtUsd } from '../../tf2/currencies.ts';
-import { bptfClassifiedsUrl, bptfProfileUrl, bptfStatsUrl, pricedbUrl, steamProfileUrl } from '../links.ts';
+import { fmtKeysMetal, fmtUsd, pureBreakdown } from '../../tf2/currencies.ts';
+import { bptfClassifiedsUrl, bptfProfileUrl, bptfStatsUrl, pricedbUrl, steamProfileUrl, tradeOfferForItemUrl } from '../links.ts';
+import { familyLabel } from '../families.ts';
 import { isUnusualSku } from '../../tf2/sku.ts';
 import { median } from '../keyRate.ts';
 
@@ -96,10 +97,11 @@ export class UnusualStrategy {
           item: { sku, name, imageUrl: item?.image_url ?? null, effect: flags?.effect ?? null },
           buy: {
             venue: 'backpack.tf', listingId: sell.row.id, keys: sell.row.keys, metal: sell.row.metal, priceText: fmtKeysMetal(cost, k),
-            seller: { steamid: sell.row.steamid, name: sell.row.user_name, isBot: !!sell.row.is_bot, premium: !!sell.row.premium, online: sell.online, tradeUrl: sell.row.trade_url },
+            seller: { steamid: sell.row.steamid, name: sell.row.user_name, isBot: !!sell.row.is_bot, family: familyLabel(sell.family), premium: !!sell.row.premium, online: sell.online, tradeUrl: sell.row.trade_url },
+            assetId: sell.row.asset_id, pure: pureBreakdown(cost, k),
             details: sell.row.details, flags,
           },
-          sell: { venue: 'backpack.tf', priceText: fmtKeysMetal(exitRef, k), note: buys[0] && buys[0].valueRef > cost ? `${buys[0].row.user_name ?? 'bot'}'s buy order` : 'own listing at 92 % of the lowest reference', buyer: buys[0] ? { name: buys[0].row.user_name, tradeUrl: buys[0].row.trade_url, isBot: true, count: buys[0].row.count } : undefined },
+          sell: { venue: 'backpack.tf', priceText: fmtKeysMetal(exitRef, k), note: buys[0] && buys[0].valueRef > cost ? `${buys[0].row.user_name ?? 'bot'}'s buy order` : 'own listing at 92 % of the lowest reference', buyer: buys[0] ? { name: buys[0].row.user_name, tradeUrl: buys[0].row.trade_url, isBot: true, family: familyLabel(buys[0].family), room: buys[0].room, count: buys[0].row.count } : undefined, pure: pureBreakdown(exitRef, k) },
           alternatives,
           references: used.map((r) => ({ name: r.name, valueText: fmtKeysMetal(r.valueRef, k), ageDays: r.ageDays === null ? null : Math.round(r.ageDays) })),
           referenceRef: refValue, referenceSpreadPct: spreadPct, discountPct: discount,
@@ -107,7 +109,8 @@ export class UnusualStrategy {
           refs: { pricedbBuyRef: refs.pricedbBuy, pricedbSellRef: refs.pricedbSell, bptfSuggestedRef: refs.bptfSuggested, keyRef: k, keyUsd: this.prices.keyUsd() },
           links: {
             classifieds: bptfClassifiedsUrl(item ?? undefined, sku, 'sell'), classifiedsBuy: bptfClassifiedsUrl(item ?? undefined, sku, 'buy'), stats: bptfStatsUrl(item ?? undefined, sku),
-            sellerBptf: bptfProfileUrl(sell.row.steamid), sellerSteam: steamProfileUrl(sell.row.steamid), sellerTradeOffer: sell.row.trade_url, pricedb: pricedbUrl(refs.skuUsed),
+            sellerBptf: bptfProfileUrl(sell.row.steamid), sellerSteam: steamProfileUrl(sell.row.steamid), sellerTradeOffer: sell.row.trade_url,
+            sellerTradeOfferForItem: tradeOfferForItemUrl(sell.row.trade_url, sell.row.asset_id), pricedb: pricedbUrl(refs.skuUsed),
           },
           steps: [
             `First check the effect/hat history on pricedb and in the backpack.tf stats (${used.length} references, spread ${spreadPct.toFixed(0)} %).`,

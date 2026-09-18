@@ -3,8 +3,9 @@ import type { Store, ListingRow } from '../../db/store.ts';
 import type { OrderBook, Book, PricedListing } from '../orderbook.ts';
 import type { PriceContext } from '../prices.ts';
 import type { Opportunities, OppInput } from '../opportunities.ts';
-import { bptfClassifiedsUrl, bptfProfileUrl, pricedbUrl, scmUrl, steamProfileUrl } from '../links.ts';
-import { fmtKeysMetal } from '../../tf2/currencies.ts';
+import { bptfClassifiedsUrl, bptfProfileUrl, pricedbUrl, scmUrl, steamProfileUrl, tradeOfferForItemUrl } from '../links.ts';
+import { familyLabel, isAutoAccept } from '../families.ts';
+import { fmtKeysMetal, pureBreakdown } from '../../tf2/currencies.ts';
 import { normalizeText } from '../../tf2/text.ts';
 
 /**
@@ -116,9 +117,13 @@ export class SnipeStrategy {
         metal: sell.row.metal,
         priceText: fmtKeysMetal(sell.valueRef, this.prices.keyRef()),
         seller: {
-          steamid: sell.row.steamid, name: sell.row.user_name, isBot: !!sell.row.is_bot, uaClient: sell.row.ua_client,
+          steamid: sell.row.steamid, name: sell.row.user_name, isBot: !!sell.row.is_bot, uaClient: sell.row.ua_client, family: familyLabel(sell.family),
           premium: !!sell.row.premium, online: sell.online, tradeUrl: sell.row.trade_url, listedAt: sell.row.listed_at, bumpedAt: sell.row.bumped_at,
+          tradeOffersPreferred: sell.row.trade_offers_preferred === null ? null : !!sell.row.trade_offers_preferred,
         },
+        assetId: sell.row.asset_id,
+        units: sell.row.stock_units,
+        pure: pureBreakdown(sell.valueRef, this.prices.keyRef()),
         details: sell.row.details,
         flags,
       },
@@ -133,6 +138,7 @@ export class SnipeStrategy {
         sellerBptf: bptfProfileUrl(sell.row.steamid),
         sellerSteam: steamProfileUrl(sell.row.steamid),
         sellerTradeOffer: sell.row.trade_url,
+        sellerTradeOfferForItem: tradeOfferForItemUrl(sell.row.trade_url, sell.row.asset_id),
         pricedb: pricedbUrl(refs.skuUsed),
         scm: item?.market_name ? scmUrl(item.market_name) : null,
       },
@@ -141,12 +147,22 @@ export class SnipeStrategy {
 
   private buildSnipe(sku: string, item: ReturnType<Store['getItem']>, sell: PricedListing, buyer: PricedListing, net: number, pct: number,
     suspicious: string | null, book: Book, refs: ReturnType<PriceContext['refs']>, s: Settings): OppInput {
-    let confidence = buyer.row.is_bot ? 0.85 : 0.6;
+    // Confidence is mostly about the EXIT: auto-accept bots take a matching offer in seconds,
+    // human-managed listings may sit for hours, humans may ignore it or haggle.
+    const autoAccept = isAutoAccept(buyer.family);
+    let confidence = autoAccept ? 0.85 : buyer.row.is_bot ? 0.5 : 0.45;
+    if (buyer.family === 'other-bot') confidence -= 0.1;
+    if (buyer.room !== null && buyer.room >= 1) confidence += 0.05; // stock room confirmed in the listing text
     if (!sell.row.premium && !sell.row.is_bot) confidence -= 0.1;
+    if (sell.row.trade_offers_preferred === 0) confidence -= 0.15; // seller wants a friend add / chat first
     if (suspicious) confidence = Math.min(confidence, 0.35);
     if (sell.online) confidence += 0.05;
     if (book.botBuys.length >= 3) confidence += 0.05;
+    if (!autoAccept) confidence = Math.min(confidence, 0.5);
     confidence = Math.max(0.05, Math.min(0.99, confidence));
+    const k = this.prices.keyRef();
+    const payPure = pureBreakdown(sell.valueRef, k);
+    const askPure = pureBreakdown(buyer.valueRef, k);
     const name = item?.name ?? sku;
     const netUsd = this.prices.refToUsd(net);
     const details = {
@@ -158,15 +174,17 @@ export class SnipeStrategy {
         metal: buyer.row.metal,
         priceText: fmtKeysMetal(buyer.valueRef, this.prices.keyRef()),
         buyer: {
-          steamid: buyer.row.steamid, name: buyer.row.user_name, isBot: !!buyer.row.is_bot, uaClient: buyer.row.ua_client,
-          premium: !!buyer.row.premium, online: buyer.online, tradeUrl: buyer.row.trade_url, count: buyer.row.count, details: buyer.row.details,
+          steamid: buyer.row.steamid, name: buyer.row.user_name, isBot: !!buyer.row.is_bot, uaClient: buyer.row.ua_client, family: familyLabel(buyer.family), autoAccept,
+          premium: !!buyer.row.premium, online: buyer.online, tradeUrl: buyer.row.trade_url, count: buyer.row.count, room: buyer.room, details: buyer.row.details,
         },
+        pure: askPure,
       },
       suspicious,
+      verified: false,
       steps: [
-        `Buy "${name}" from the seller for ${fmtKeysMetal(sell.valueRef, this.prices.keyRef())} (direct offer via their trade URL).`,
-        `Sell it to ${buyer.row.user_name ?? 'the buy order'} for ${fmtKeysMetal(buyer.valueRef, this.prices.keyRef())}${buyer.row.is_bot ? ' (bot: accepts instantly if still in stock)' : ''}.`,
-        'Check on backpack.tf that both listings are still active before sending the offer.',
+        `Leg 1 — buy: open the seller's offer link (their "${name}" is preloaded) and add ${payPure.text} from your inventory. Send.`,
+        `Leg 2 — sell: once it is yours, open ${buyer.row.user_name ?? 'the buyer'}'s offer link, add "${name}" from your side and take ${askPure.text} from theirs${autoAccept ? ' (bot: accepts within seconds while it has room' + (buyer.room !== null ? `, room ${buyer.room}` : '') + ')' : ' (human-managed: may take hours)'}.`,
+        sell.row.trade_offers_preferred === 0 ? 'The seller prefers friend requests / chat over offers: expect delays.' : 'Check the classifieds link first if the alert is older than a couple of minutes.',
       ],
     };
     return {

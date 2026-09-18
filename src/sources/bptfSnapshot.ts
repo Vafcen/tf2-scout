@@ -67,12 +67,12 @@ export class BptfSnapshotSource {
   }
 
   /** Enqueues a SKU (prio 0 = highest). Ignored if it was already queried less than `minAgeSec` ago. */
-  request(sku: string, prio = 1, minAgeSec = 120): void {
-    if (!this.enabled || this.queued.has(sku)) return;
+  request(sku: string, prio = 1, minAgeSec = 120): boolean {
+    if (!this.enabled || this.queued.has(sku)) return false;
     const last = this.lastSnapshotBySku.get(sku) ?? 0;
-    if (now() - last < minAgeSec) return;
+    if (now() - last < minAgeSec) return false;
     const item = this.store.getItem(sku);
-    if (!item?.name) return;
+    if (!item?.name) return false;
     this.queue.push({ name: item.name, sku, prio });
     this.queued.add(sku);
     this.queue.sort((a, b) => a.prio - b.prio);
@@ -80,6 +80,13 @@ export class BptfSnapshotSource {
       const dropped = this.queue.splice(500);
       for (const d of dropped) this.queued.delete(d.sku);
     }
+    return true;
+  }
+
+  /** Seconds since the last applied snapshot of this SKU (Infinity if never). */
+  ageOf(sku: string): number {
+    const last = this.lastSnapshotBySku.get(sku);
+    return last ? now() - last : Infinity;
   }
 
   private fillFromActivity(): void {
@@ -156,5 +163,6 @@ export class BptfSnapshotSource {
     this.lastAt = seenAt;
     this.lastSnapshotBySku.set(sku, seenAt);
     bus.emitTyped('listings:changed', new Map([[sku, { sku, sellIds, buyChanged, deletedIds: [] }]]));
+    bus.emitTyped('snapshot:applied', { sku, ts: seenAt, listings: keepIds.length });
   }
 }
