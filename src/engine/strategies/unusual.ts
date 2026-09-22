@@ -80,12 +80,12 @@ export class UnusualStrategy {
         .map((o) => ({ listingId: o.row.id, seller: o.row.user_name, isBot: !!o.row.is_bot, priceText: fmtKeysMetal(o.valueRef, k), tradeUrl: o.row.trade_url }));
       const bait = baitReason(sell.row.details, cost, refValue);
       let confidence = 0.3 + Math.min(0.25, used.length * 0.08) - Math.min(0.2, spreadPct / 200);
-      if (bait) confidence = Math.min(confidence, BAIT_CONFIDENCE_CAP);
       const oldest = Math.max(...used.map((r) => r.ageDays ?? 0));
       if (oldest > 180) confidence -= 0.1;
       if (buys.length >= 2) confidence += 0.1;
       if (sell.row.is_bot) confidence += 0.05;
       if (!sell.row.premium && !sell.row.is_bot) confidence -= 0.05;
+      if (bait) confidence = Math.min(confidence, BAIT_CONFIDENCE_CAP); // applied last so nothing lifts it back up
       confidence = Math.max(0.05, Math.min(0.9, confidence));
       keep.push(sell.row.id);
       const name = item?.name ?? sku;

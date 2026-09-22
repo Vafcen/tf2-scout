@@ -168,3 +168,22 @@ test('bait listings never reach the alert threshold', () => {
   assert.ok(opp.confidence <= 0.15, `confidence ${opp.confidence} must stay below the 0.3 alert threshold`);
   assert.match(JSON.parse(opp.details!).bait, /asking 5 %/);
 });
+
+test('the bait cap is applied last in the unusual lane', async () => {
+  const { UnusualStrategy } = await import('../src/engine/strategies/unusual.ts');
+  const { store, book, prices, opps } = setup();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  s.unusual.enabled = 'on';
+  s.capitalKeys = 1000;
+  const unusualItem = { ...listing({ id: 'x', sku: '30976;5;u60', intent: 'sell', steamid: '0', metal: 1 }).item, name: 'Dead Presidents Tundra Top', effect: 60 };
+  store.upsertItem('30976;5;u60', unusualItem);
+  store.upsertRefPrice('30976;5;u60', 'pricedb', 14, 35, 16, 40, now());
+  store.upsertListing({ ...listing({ id: '440_1', sku: '30976;5;u60', intent: 'sell', steamid: 'S1', metal: 24, isBot: false, uaClient: null, details: 'Prices negotiable! Human trader' }), item: unusualItem });
+  // two bot buy orders near the reference: they add +0.1, which must not lift the capped confidence
+  store.upsertListing({ ...listing({ id: '440_B1_a', sku: '30976;5;u60', intent: 'buy', steamid: 'B1', keys: 14, metal: 35, uaClient: 'Gladiator.tf bot' }), item: unusualItem });
+  store.upsertListing({ ...listing({ id: '440_B2_a', sku: '30976;5;u60', intent: 'buy', steamid: 'B2', keys: 14, metal: 33, uaClient: 'TF2Autobot' }), item: unusualItem });
+  new UnusualStrategy(store, book, prices, opps).evaluate('30976;5;u60', s);
+  const opp = opps.active('unusual')[0];
+  assert.ok(opp, 'the opportunity exists');
+  assert.ok(opp.confidence <= 0.15, `confidence ${opp.confidence} must stay capped`);
+});
