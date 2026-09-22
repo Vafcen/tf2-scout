@@ -153,3 +153,18 @@ test('buy orders that are already full are not used as exits', () => {
   const opp = opps.active('snipe')[0];
   assert.equal(opp.sell_price_ref, 3.11, 'the full buy order (1/1) must be skipped');
 });
+
+test('bait listings never reach the alert threshold', () => {
+  const { store, book, prices, opps } = setup();
+  const s = structuredClone(DEFAULT_SETTINGS);
+  store.upsertItem('479;6', listing({ id: 'x', sku: '479;6', intent: 'sell', steamid: '0', metal: 1 }).item);
+  store.upsertRefPrice('479;6', 'pricedb', 0, 19, 0, 21, now()); // the item really is worth ~20 ref
+  // an item bots pay 20 ref for, "sold" at 1 ref by a human who says offers are welcome
+  store.upsertListing(listing({ id: '440_1', sku: '479;6', intent: 'sell', steamid: 'S1', metal: 1, isBot: false, uaClient: null, details: 'Send me offers wont sell for the lowest' }));
+  store.upsertListing(listing({ id: '440_B1_a', sku: '479;6', intent: 'buy', steamid: 'B1', metal: 20, uaClient: 'Gladiator.tf bot' }));
+  new SnipeStrategy(store, book, prices, opps).evaluate('479;6', s);
+  const opp = opps.active('snipe')[0];
+  assert.ok(opp, 'it is still listed on the dashboard');
+  assert.ok(opp.confidence <= 0.15, `confidence ${opp.confidence} must stay below the 0.3 alert threshold`);
+  assert.match(JSON.parse(opp.details!).bait, /asking 5 %/);
+});

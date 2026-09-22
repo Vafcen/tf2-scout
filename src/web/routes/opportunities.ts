@@ -51,6 +51,7 @@ export function oppTable(app: AppContext, f: Filters, rows: OppRow[]): string {
       <td class="item">${img ? raw(`<img class="icon" src="${esc(img)}" alt="">`) : ''}<a href="/opp/${r.id}">${d.item?.name ?? r.sku}</a>
         ${d.suspicious ? raw('<span class="tag warn" title="Listing mentions ' + esc(d.suspicious) + '">⚠</span>') : ''}
         ${d.verified ? raw('<span class="tag bot" title="verified by classifieds snapshot">✓</span>') : ''}
+        ${d.bait ? raw('<span class="tag warn" title="looks like bait: ' + esc(d.bait) + '">bait</span>') : ''}
         ${r.status === 'offered' ? raw('<span class="tag keys" title="you sent an offer">offered</span>') : ''}
         ${d.buy?.flags?.spells ? raw('<span class="tag bot" title="spells">✨ ' + esc((d.buy.flags.spells as string[]).join(', ')) + '</span>') : ''}
         ${d.buy?.flags?.paint ? raw('<span class="tag bot" title="painted">🎨 ' + esc(d.buy.flags.paint) + '</span>') : ''}
@@ -120,6 +121,7 @@ export function opportunityRoutes(hono: Hono, app: AppContext): void {
         <div class="kpi"><div class="label">Net</div><div class="value pos">+${fmtKeysMetal(r.net_ref ?? 0, k)}</div><div class="small muted">${fmtUsd(r.net_usd ?? 0)} · ${pctText(r.pct)}</div></div>
         <div class="kpi"><div class="label">Confidence · status</div><div class="value">${Math.round(r.confidence * 100)} % · ${r.status}</div><div class="small muted">created ${fmtAgo(r.created_at)} · upd. ${fmtAgo(r.updated_at)} · ${d.verified ? '✓ verified by snapshot' : 'unverified (live feed)'}</div></div>
       </div>
+      ${d.bait ? raw(`<div class="card" style="border-color:var(--red)"><span class="tag warn">⚠ Looks like bait</span> ${esc(String(d.bait))}. Sellers who list like this usually refuse the trade, want to negotiate or want you to add them — the listed price is not the real price. Treat the profit shown here as fictional until you confirm it.</div>`) : ''}
       ${d.suspicious ? raw(`<div class="card"><span class="tag warn">⚠ Warning</span> The listing mentions "${esc(d.suspicious)}": this is usually a middleman (quicksell) or a backpack seller; double-check before sending anything.</div>`) : ''}
       <div class="two">
         <div class="card">
@@ -161,6 +163,7 @@ export function opportunityRoutes(hono: Hono, app: AppContext): void {
             ${d.sell?.buyer?.details ? html`<tr><th>Buyer text</th><td class="small">${d.sell.buyer.details}</td></tr>` : ''}
             ${d.buy?.flags ? html`<tr><th>Attributes</th><td class="small mono">${JSON.stringify(d.buy.flags)}</td></tr>` : ''}
             ${d.discountPct !== undefined ? html`<tr><th>Discount vs pricedb</th><td>${Number(d.discountPct).toFixed(1)} % · ${d.liquidBuyOrders} liquid buy orders</td></tr>` : ''}
+            ${d.bait ? html`<tr><th>Bait signal</th><td>${d.bait}</td></tr>` : ''}
             ${d.expiredReason ? html`<tr><th>Expired</th><td>${d.expiredReason}</td></tr>` : ''}
           </table>
           <details><summary>Full JSON</summary><pre class="mono">${JSON.stringify(d, null, 2)}</pre></details>

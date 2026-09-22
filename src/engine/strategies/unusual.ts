@@ -7,6 +7,7 @@ import type { Opportunities } from '../opportunities.ts';
 import { fmtKeysMetal, fmtUsd, pureBreakdown } from '../../tf2/currencies.ts';
 import { bptfClassifiedsUrl, bptfProfileUrl, bptfStatsUrl, pricedbUrl, steamProfileUrl, tradeOfferForItemUrl } from '../links.ts';
 import { familyLabel } from '../families.ts';
+import { baitReason, BAIT_CONFIDENCE_CAP } from '../bait.ts';
 import { isUnusualSku } from '../../tf2/sku.ts';
 import { median } from '../keyRate.ts';
 
@@ -77,7 +78,9 @@ export class UnusualStrategy {
         .filter((o) => o.row.id !== sell.row.id && o.row.steamid !== sell.row.steamid && o.valueRef <= refValue * (1 - s.unusual.minDiscountPct / 100))
         .slice(0, 5)
         .map((o) => ({ listingId: o.row.id, seller: o.row.user_name, isBot: !!o.row.is_bot, priceText: fmtKeysMetal(o.valueRef, k), tradeUrl: o.row.trade_url }));
+      const bait = baitReason(sell.row.details, cost, refValue);
       let confidence = 0.3 + Math.min(0.25, used.length * 0.08) - Math.min(0.2, spreadPct / 200);
+      if (bait) confidence = Math.min(confidence, BAIT_CONFIDENCE_CAP);
       const oldest = Math.max(...used.map((r) => r.ageDays ?? 0));
       if (oldest > 180) confidence -= 0.1;
       if (buys.length >= 2) confidence += 0.1;
@@ -104,7 +107,7 @@ export class UnusualStrategy {
           sell: { venue: 'backpack.tf', priceText: fmtKeysMetal(exitRef, k), note: buys[0] && buys[0].valueRef > cost ? `${buys[0].row.user_name ?? 'bot'}'s buy order` : 'own listing at 92 % of the lowest reference', buyer: buys[0] ? { name: buys[0].row.user_name, tradeUrl: buys[0].row.trade_url, isBot: true, family: familyLabel(buys[0].family), room: buys[0].room, count: buys[0].row.count } : undefined, pure: pureBreakdown(exitRef, k) },
           alternatives,
           references: used.map((r) => ({ name: r.name, valueText: fmtKeysMetal(r.valueRef, k), ageDays: r.ageDays === null ? null : Math.round(r.ageDays) })),
-          referenceRef: refValue, referenceSpreadPct: spreadPct, discountPct: discount,
+          referenceRef: refValue, referenceSpreadPct: spreadPct, discountPct: discount, bait,
           book: { buyOrders: book.buys.length, botBuysOnline: buys.length, sells: book.sells.length, bestBuyRef: buys[0]?.valueRef ?? null, bestSellRef: book.bestSell?.valueRef ?? null },
           refs: { pricedbBuyRef: refs.pricedbBuy, pricedbSellRef: refs.pricedbSell, bptfSuggestedRef: refs.bptfSuggested, keyRef: k, keyUsd: this.prices.keyUsd() },
           links: {

@@ -5,6 +5,7 @@ import type { PriceContext } from '../prices.ts';
 import type { Opportunities, OppInput } from '../opportunities.ts';
 import { bptfClassifiedsUrl, bptfProfileUrl, pricedbUrl, scmUrl, steamProfileUrl, tradeOfferForItemUrl } from '../links.ts';
 import { familyLabel, isAutoAccept } from '../families.ts';
+import { baitReason, BAIT_CONFIDENCE_CAP } from '../bait.ts';
 import { fmtKeysMetal, pureBreakdown } from '../../tf2/currencies.ts';
 import { normalizeText } from '../../tf2/text.ts';
 
@@ -53,6 +54,7 @@ export class SnipeStrategy {
       if (buyer) {
         const net = buyer.valueRef - cost;
         const pct = (net / cost) * 100;
+        const bait = baitReason(sell.row.details, cost, buyer.valueRef);
         if (net + 1e-6 >= s.snipe.minNetRef && pct + 1e-6 >= s.snipe.minPct) {
           sellersDone.add(sell.row.steamid);
           if (snipeEmitted) continue;
@@ -62,7 +64,7 @@ export class SnipeStrategy {
             .filter((o) => o.row.id !== sell.row.id && o.row.steamid !== sell.row.steamid && o.valueRef <= buyer.valueRef - s.snipe.minNetRef)
             .slice(0, 5)
             .map((o) => ({ listingId: o.row.id, seller: o.row.user_name, isBot: !!o.row.is_bot, priceText: fmtKeysMetal(o.valueRef, this.prices.keyRef()), tradeUrl: o.row.trade_url }));
-          const input = this.buildSnipe(sku, item, sell, buyer, net, pct, suspicious, book, refs, s);
+          const input = this.buildSnipe(sku, item, sell, buyer, net, pct, suspicious, book, refs, s, bait);
           (input.details as Record<string, unknown>).alternatives = alternatives;
           this.opps.upsert(input);
           continue;
@@ -78,6 +80,7 @@ export class SnipeStrategy {
         if (discount >= s.snipe.dealMinPct && liquidBuys >= s.snipe.dealMinBuyOrders) {
           const exitRef = refs.pricedbBuy && refs.pricedbBuy > cost ? refs.pricedbBuy : ref * 0.95;
           const net = exitRef - cost;
+          const dealBait = baitReason(sell.row.details, cost, exitRef);
           if (net + 1e-6 >= s.snipe.minNetRef) {
             sellersDone.add(sell.row.steamid);
             if (dealEmitted) continue;
@@ -87,7 +90,7 @@ export class SnipeStrategy {
               .filter((o) => o.row.id !== sell.row.id && o.row.steamid !== sell.row.steamid && ((ref - o.valueRef) / ref) * 100 >= s.snipe.dealMinPct)
               .slice(0, 5)
               .map((o) => ({ listingId: o.row.id, seller: o.row.user_name, isBot: !!o.row.is_bot, priceText: fmtKeysMetal(o.valueRef, this.prices.keyRef()), tradeUrl: o.row.trade_url }));
-            const input = this.buildDeal(sku, item, sell, discount, net, exitRef, liquidBuys, suspicious, book, refs, s);
+            const input = this.buildDeal(sku, item, sell, discount, net, exitRef, liquidBuys, suspicious, book, refs, s, dealBait);
             (input.details as Record<string, unknown>).alternatives = alternatives;
             this.opps.upsert(input);
           }
@@ -146,7 +149,7 @@ export class SnipeStrategy {
   }
 
   private buildSnipe(sku: string, item: ReturnType<Store['getItem']>, sell: PricedListing, buyer: PricedListing, net: number, pct: number,
-    suspicious: string | null, book: Book, refs: ReturnType<PriceContext['refs']>, s: Settings): OppInput {
+    suspicious: string | null, book: Book, refs: ReturnType<PriceContext['refs']>, s: Settings, bait: string | null): OppInput {
     // Confidence is mostly about the EXIT: auto-accept bots take a matching offer in seconds,
     // human-managed listings may sit for hours, humans may ignore it or haggle.
     const autoAccept = isAutoAccept(buyer.family);
@@ -159,6 +162,7 @@ export class SnipeStrategy {
     if (sell.online) confidence += 0.05;
     if (book.botBuys.length >= 3) confidence += 0.05;
     if (!autoAccept) confidence = Math.min(confidence, 0.5);
+    if (bait) confidence = Math.min(confidence, BAIT_CONFIDENCE_CAP); // below the alert threshold on purpose
     confidence = Math.max(0.05, Math.min(0.99, confidence));
     const k = this.prices.keyRef();
     const payPure = pureBreakdown(sell.valueRef, k);
@@ -180,8 +184,10 @@ export class SnipeStrategy {
         pure: askPure,
       },
       suspicious,
+      bait,
       verified: false,
       steps: [
+        ...(bait ? [`Careful: this listing looks like bait (${bait}). Sellers who price like this usually refuse the trade or want to negotiate. Verify before spending time on it.`] : []),
         `Leg 1 — buy: open the seller's offer link (their "${name}" is preloaded) and add ${payPure.text} from your inventory. Send.`,
         `Leg 2 — sell: once it is yours, open ${buyer.row.user_name ?? 'the buyer'}'s offer link, add "${name}" from your side and take ${askPure.text} from theirs${autoAccept ? ' (bot: accepts within seconds while it has room' + (buyer.room !== null ? `, room ${buyer.room}` : '') + ')' : ' (human-managed: may take hours)'}.`,
         sell.row.trade_offers_preferred === 0 ? 'The seller prefers friend requests / chat over offers: expect delays.' : 'Check the classifieds link first if the alert is older than a couple of minutes.',
@@ -197,9 +203,10 @@ export class SnipeStrategy {
   }
 
   private buildDeal(sku: string, item: ReturnType<Store['getItem']>, sell: PricedListing, discount: number, net: number, exitRef: number,
-    liquidBuys: number, suspicious: string | null, book: Book, refs: ReturnType<PriceContext['refs']>, s: Settings): OppInput {
+    liquidBuys: number, suspicious: string | null, book: Book, refs: ReturnType<PriceContext['refs']>, s: Settings, bait: string | null): OppInput {
     let confidence = 0.4 + Math.min(0.3, liquidBuys * 0.05);
     if (suspicious) confidence = Math.min(confidence, 0.3);
+    if (bait) confidence = Math.min(confidence, BAIT_CONFIDENCE_CAP);
     if (refs.pricedbTs && refs.pricedbTs < Math.floor(Date.now() / 1000) - 14 * 86400) confidence -= 0.15; // stale reference price
     confidence = Math.max(0.05, Math.min(0.95, confidence));
     const name = item?.name ?? sku;
@@ -209,6 +216,7 @@ export class SnipeStrategy {
       discountPct: discount,
       liquidBuyOrders: liquidBuys,
       suspicious,
+      bait,
       steps: [
         `Buy "${name}" for ${fmtKeysMetal(sell.valueRef, this.prices.keyRef())} (≈ ${discount.toFixed(0)} % below pricedb).`,
         `Expected exit: ${fmtKeysMetal(exitRef, this.prices.keyRef())} (bot buy orders or your own sell listing).`,

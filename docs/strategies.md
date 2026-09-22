@@ -25,6 +25,13 @@ Exits (buy orders) are ranked by reliability:
 - conditional text (spells, parts, paints, sheens, levels…) or a price above `max(1.6 × reference, reference + 1 ref)`
   disqualifies the order.
 
+**Bait filter.** A sell listing is flagged as bait when it asks less than 50 % of what the reliable buy orders pay, or
+when its text says the price is not the real price ("send me offers", "won't sell for the lowest", "negotiable",
+"offers welcome", "or best offer", "lowest price"…). Bait keeps its place on the dashboard with a `bait` tag, but its
+confidence is capped at 0.15, below the 0.3 alert threshold, so it never reaches Discord or the desktop. Measured over
+a week of live data these were ~1 % of snipes but accounted for the entire high-profit tail (48 keys of fictional
+profit), which is why the cap is hard rather than a scoring penalty.
+
 Each opportunity carries the seller's asset id, so the "offer to seller" link opens the trade window with the item
 preloaded (`for_item=440_2_<assetid>`), the exact pure to add (`keys + ref + rec + scrap`) on both legs, and — when a
 token is configured — a `verified` flag set only after a fresh classifieds snapshot confirmed both legs.
